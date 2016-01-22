@@ -37,7 +37,7 @@ public class Application extends Controller {
         if (isSetup()) {
             if (code == null) {
                 // start oauth
-                String url = "https://login.salesforce.com/services/oauth2/authorize?response_type=code" +
+                final String url = "https://login.salesforce.com/services/oauth2/authorize?response_type=code" +
                         "&client_id=" + force.consumerKey +
                         "&redirect_uri=" + oauthCallbackUrl(request());
                 return F.Promise.pure(redirect(url));
@@ -63,9 +63,6 @@ public class Application extends Controller {
             return redirect(routes.Application.index(null));
         } else {
             final String maybeHerokuAppName = request().host().split(".herokuapp.com")[0].replaceAll(request().host(), "");
-
-            System.out.println(maybeHerokuAppName);
-
             return ok(setup.render(maybeHerokuAppName));
         }
     }
