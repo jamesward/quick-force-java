@@ -1,0 +1,7 @@
+{
+  "name": "Quick Force (Java)",
+  "description": "The quickest and easiest way to start a Java web app that uses the Force.com REST APIs",
+  "repository": "https://github.com/jamesward/quick-force-java",
+  "website": "http://www.jamesward.com",
+  "keywords": ["salesforce", "java"]
+}
