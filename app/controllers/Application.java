@@ -3,58 +3,56 @@ package controllers;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
-import play.libs.F;
+import com.typesafe.config.Config;
 import play.libs.Json;
+import play.libs.concurrent.HttpExecutionContext;
 import play.libs.ws.WSClient;
 import play.libs.ws.WSResponse;
-import play.mvc.*;
-
-import views.html.*;
+import play.mvc.Controller;
+import play.mvc.Http;
+import play.mvc.Result;
+import views.html.index;
+import views.html.setup;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
-
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 public class Application extends Controller {
-
-    private final Force force;
-
-    @Inject
-    public Application(Force force) {
-        this.force = force;
-    }
+    @Inject Force force;
 
     private boolean isSetup() {
-        return ((force.consumerKey != null) && (force.consumerSecret != null));
+        return ((force.consumerKey() != null) && (force.consumerSecret() != null));
     }
 
     private String oauthCallbackUrl(Http.Request request) {
         return (request.secure() ? "https" : "http") + "://" + request.host();
     }
 
-    public F.Promise<Result> index(String code) {
+    public CompletionStage<Result> index(String code) {
         if (isSetup()) {
             if (code == null) {
                 // start oauth
                 final String url = "https://login.salesforce.com/services/oauth2/authorize?response_type=code" +
-                        "&client_id=" + force.consumerKey +
+                        "&client_id=" + force.consumerKey() +
                         "&redirect_uri=" + oauthCallbackUrl(request());
-                return F.Promise.pure(redirect(url));
+                return CompletableFuture.completedFuture(redirect(url));
             } else {
-                return force.getToken(code, oauthCallbackUrl(request())).flatMap(authInfo ->
-                        force.getAccounts(authInfo).<Result>map(accounts ->
+                return force.getToken(code, oauthCallbackUrl(request())).thenCompose(authInfo ->
+                        force.getAccounts(authInfo).thenApply(accounts ->
                                 ok(index.render(accounts))
                         )
-                ).recover(error -> {
-                    if (error instanceof Force.AuthException)
+                ).exceptionally(error -> {
+                    if (error.getCause() instanceof Force.AuthException)
                         return redirect(routes.Application.index(null));
                     else
                         return internalServerError(error.getMessage());
                 });
             }
         } else {
-            return F.Promise.pure(redirect(routes.Application.setup()));
+            return CompletableFuture.completedFuture(redirect(routes.Application.setup()));
         }
     }
 
@@ -70,34 +68,38 @@ public class Application extends Controller {
 
     @Singleton
     public static class Force {
+        @Inject WSClient ws;
 
-        private final WSClient ws;
+        @Inject Config config;
 
-        private final String consumerKey;
-        private final String consumerSecret;
-
-        @Inject
-        public Force(play.Application app, WSClient ws) {
-            this.ws = ws;
-            this.consumerKey = app.configuration().getString("consumer.key");
-            this.consumerSecret = app.configuration().getString("consumer.secret");
+        String consumerKey() {
+            return config.getString("consumer.key");
         }
 
-        public F.Promise<AuthInfo> getToken(String code, String redirectUrl) {
-            F.Promise<WSResponse> responsePromise = ws.url("https://login.salesforce.com/services/oauth2/token")
-                    .setQueryParameter("grant_type", "authorization_code")
-                    .setQueryParameter("code", code)
-                    .setQueryParameter("client_id", consumerKey)
-                    .setQueryParameter("client_secret", consumerSecret)
-                    .setQueryParameter("redirect_uri", redirectUrl)
-                    .post("");
+        String consumerSecret() {
+            return config.getString("consumer.secret");
+        }
 
-            return responsePromise.flatMap(response -> {
-                JsonNode jsonNode = response.asJson();
-                if (jsonNode.has("error"))
-                    return F.Promise.throwing(new AuthException(jsonNode.get("error").textValue()));
-                else
-                    return F.Promise.pure(Json.fromJson(jsonNode, AuthInfo.class));
+        public CompletionStage<AuthInfo> getToken(String code, String redirectUrl) {
+            final CompletionStage<WSResponse> responsePromise = ws.url("https://login.salesforce.com/services/oauth2/token")
+                    .addQueryParameter("grant_type", "authorization_code")
+                    .addQueryParameter("code", code)
+                    .addQueryParameter("client_id", consumerKey())
+                    .addQueryParameter("client_secret", consumerSecret())
+                    .addQueryParameter("redirect_uri", redirectUrl)
+                    .execute(Http.HttpVerbs.POST);
+
+            return responsePromise.thenCompose(response -> {
+                final JsonNode jsonNode = response.asJson();
+
+                if (jsonNode.has("error")) {
+                    CompletableFuture<AuthInfo> completableFuture = new CompletableFuture<>();
+                    completableFuture.completeExceptionally(new AuthException(jsonNode.get("error").textValue()));
+                    return completableFuture;
+                }
+                else {
+                    return CompletableFuture.completedFuture(Json.fromJson(jsonNode, AuthInfo.class));
+                }
             });
         }
 
@@ -130,18 +132,22 @@ public class Application extends Controller {
             }
         }
 
-        public F.Promise<List<Account>> getAccounts(AuthInfo authInfo) {
-            F.Promise<WSResponse> responsePromise = ws.url(authInfo.instanceUrl + "/services/data/v34.0/query/")
-                    .setHeader("Authorization", "Bearer " + authInfo.accessToken)
-                    .setQueryParameter("q", "SELECT Id, Name, Type, Industry, Rating FROM Account")
+        public CompletionStage<List<Account>> getAccounts(AuthInfo authInfo) {
+            CompletionStage<WSResponse> responsePromise = ws.url(authInfo.instanceUrl + "/services/data/v34.0/query/")
+                    .addHeader("Authorization", "Bearer " + authInfo.accessToken)
+                    .addQueryParameter("q", "SELECT Id, Name, Type, Industry, Rating FROM Account")
                     .get();
 
-            return responsePromise.flatMap(response -> {
-                JsonNode jsonNode = response.asJson();
-                if (jsonNode.has("error"))
-                    return F.Promise.throwing(new Exception(jsonNode.get("error").textValue()));
-                else
-                    return F.Promise.pure(Json.fromJson(jsonNode, QueryResultAccount.class).records);
+            return responsePromise.thenCompose(response -> {
+                final JsonNode jsonNode = response.asJson();
+                if (jsonNode.has("error")) {
+                    CompletableFuture<List<Account>> completableFuture = new CompletableFuture<>();
+                    completableFuture.completeExceptionally(new AuthException(jsonNode.get("error").textValue()));
+                    return completableFuture;
+                }
+                else {
+                    return CompletableFuture.completedFuture(Json.fromJson(jsonNode, QueryResultAccount.class).records);
+                }
             });
         }
     }
