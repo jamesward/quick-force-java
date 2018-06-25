@@ -5,7 +5,6 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.typesafe.config.Config;
 import play.libs.Json;
-import play.libs.concurrent.HttpExecutionContext;
 import play.libs.ws.WSClient;
 import play.libs.ws.WSResponse;
 import play.mvc.Controller;
@@ -21,10 +20,17 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 public class Application extends Controller {
-    @Inject Force force;
+    @Inject
+    private Force force;
 
     private boolean isSetup() {
-        return ((force.consumerKey() != null) && (force.consumerSecret() != null));
+        try {
+            force.consumerKey();
+            force.consumerSecret();
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private String oauthCallbackUrl(Http.Request request) {
@@ -68,9 +74,11 @@ public class Application extends Controller {
 
     @Singleton
     public static class Force {
-        @Inject WSClient ws;
+        @Inject
+        WSClient ws;
 
-        @Inject Config config;
+        @Inject
+        Config config;
 
         String consumerKey() {
             return config.getString("consumer.key");
@@ -80,7 +88,7 @@ public class Application extends Controller {
             return config.getString("consumer.secret");
         }
 
-        public CompletionStage<AuthInfo> getToken(String code, String redirectUrl) {
+        CompletionStage<AuthInfo> getToken(String code, String redirectUrl) {
             final CompletionStage<WSResponse> responsePromise = ws.url("https://login.salesforce.com/services/oauth2/token")
                     .addQueryParameter("grant_type", "authorization_code")
                     .addQueryParameter("code", code)
@@ -96,8 +104,7 @@ public class Application extends Controller {
                     CompletableFuture<AuthInfo> completableFuture = new CompletableFuture<>();
                     completableFuture.completeExceptionally(new AuthException(jsonNode.get("error").textValue()));
                     return completableFuture;
-                }
-                else {
+                } else {
                     return CompletableFuture.completedFuture(Json.fromJson(jsonNode, AuthInfo.class));
                 }
             });
@@ -113,12 +120,12 @@ public class Application extends Controller {
         }
 
         @JsonIgnoreProperties(ignoreUnknown = true)
-        private static class QueryResultAccount {
+        public static class QueryResultAccount {
             public List<Account> records;
         }
 
         @JsonIgnoreProperties(ignoreUnknown = true)
-        private static class AuthInfo {
+        public static class AuthInfo {
             @JsonProperty("access_token")
             public String accessToken;
 
@@ -126,13 +133,13 @@ public class Application extends Controller {
             public String instanceUrl;
         }
 
-        protected static class AuthException extends Exception {
-            public AuthException(String message) {
+        public static class AuthException extends Exception {
+            AuthException(String message) {
                 super(message);
             }
         }
 
-        public CompletionStage<List<Account>> getAccounts(AuthInfo authInfo) {
+        CompletionStage<List<Account>> getAccounts(AuthInfo authInfo) {
             CompletionStage<WSResponse> responsePromise = ws.url(authInfo.instanceUrl + "/services/data/v34.0/query/")
                     .addHeader("Authorization", "Bearer " + authInfo.accessToken)
                     .addQueryParameter("q", "SELECT Id, Name, Type, Industry, Rating FROM Account")
@@ -144,9 +151,9 @@ public class Application extends Controller {
                     CompletableFuture<List<Account>> completableFuture = new CompletableFuture<>();
                     completableFuture.completeExceptionally(new AuthException(jsonNode.get("error").textValue()));
                     return completableFuture;
-                }
-                else {
-                    return CompletableFuture.completedFuture(Json.fromJson(jsonNode, QueryResultAccount.class).records);
+                } else {
+                    QueryResultAccount queryResultAccount = Json.fromJson(jsonNode, QueryResultAccount.class);
+                    return CompletableFuture.completedFuture(queryResultAccount.records);
                 }
             });
         }
