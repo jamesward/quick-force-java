@@ -140,7 +140,7 @@ public class Application extends Controller {
         CompletionStage<List<Account>> getAccounts(AuthInfo authInfo) {
             CompletionStage<WSResponse> responsePromise = ws.url(authInfo.instanceUrl + "/services/data/v34.0/query/")
                     .addHeader("Authorization", "Bearer " + authInfo.accessToken)
-                    .addQueryParameter("q", "SELECT Name, Type, Industry FROM Account LIMIT 25")
+                    .addQueryParameter("q", "SELECT Name, Type, Industry FROM Account WHERE Type='Partner' LIMIT 25")
                     .get();
 
             return responsePromise.thenCompose(response -> {
